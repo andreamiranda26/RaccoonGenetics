@@ -1,0 +1,163 @@
+---
+title: "Structure Analysis Raccoons (grouped by Region)"
+output:
+  html_document:
+    df_print: paged
+---
+
+
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(ggplot2)
+knitr::opts_chunk$set(fig.path = "plots/", dev = c("png", "svg"), dpi = 400, cache = TRUE)
+
+# color palette (reused for all K)
+colors <- c("#1F77B4FF", "#FF7F0EFF", "#2CA02CFF", "#D62728FF", "#9467BDFF")
+```
+```{r regions_1, message=FALSE, warning=FALSE}
+# STRUCTURE Harvester .indfile paths
+k1.file <- "/scratch/Raccoon_andrea/gabe_trial/analysis/structure/harvester/K1.indfile"
+k2.file <- "/scratch/Raccoon_andrea/gabe_trial/analysis/structure/harvester/K2.indfile"
+k3.file <- "/scratch/Raccoon_andrea/gabe_trial/analysis/structure/harvester/K3.indfile"
+k4.file <- "/scratch/Raccoon_andrea/gabe_trial/analysis/structure/harvester/K4.indfile"
+
+# Read indfiles and keep ID + Q columns
+k1 <- read.table(k1.file, sep = "", stringsAsFactors = FALSE) %>% 
+  select(V2, V6) %>% rename(ID = V2, K1 = V6)
+
+k2 <- read.table(k2.file, sep = "", stringsAsFactors = FALSE) %>% 
+  select(V2, V6, V7) %>% rename(ID = V2, K1 = V6, K2 = V7)
+
+k3 <- read.table(k3.file, sep = "", stringsAsFactors = FALSE) %>% 
+  select(V2, V6, V7, V8) %>% rename(ID = V2, K1 = V6, K2 = V7, K3 = V8)
+
+k4 <- read.table(k4.file, sep = "", stringsAsFactors = FALSE) %>% 
+  select(V2, V6, V7, V8, V9) %>% rename(ID = V2, K1 = V6, K2 = V7, K3 = V8, K4 = V9)
+
+# Labels with county ("Location")
+labels.df <- read.csv("/scratch/Raccoon_andrea/gabe_trial/scripts/PopulationGenetics/labels.csv",
+                      stringsAsFactors = FALSE)
+```
+
+```{r avgQRun, message=FALSE, warning=FALSE}
+avg_by_id <- function(df){
+  df %>%
+    mutate(ID = as.integer(ID)) %>%
+    group_by(ID) %>%
+    summarise(across(starts_with("K"), ~mean(.x, na.rm = TRUE)), .groups = "drop") %>%
+    arrange(ID)
+}
+
+k1.mean <- avg_by_id(k1)
+k2.mean <- avg_by_id(k2)
+k3.mean <- avg_by_id(k3)
+k4.mean <- avg_by_id(k4)
+```
+
+```{r klong, message=FALSE, warning=FALSE}
+region_map <- tibble::tribble(
+  ~Location,   ~Region,
+  # Southwest (SW Coastal Plain / Mobile basin)
+  "Baldwin","SW","Mobile","SW","Monroe","SW","Marengo","SW","Dallas","SW",
+  # Southeast (SE Coastal Plain)
+  "Houston","SE","Dale","SE","Coffee","SE","Geneva","SE","Pike","SE","Barbour","SE",
+  # Black Belt / Central (BB)
+  "Montgomery","BB","Elmore","BB","Autauga","BB","Lee","BB","Chilton","BB","Macon","BB",
+  # Northeast (NE Appalachian Foothills)
+  "Calhoun","NE","Etowah","NE","Cherokee","NE","DeKalb","NE","Blount","NE",
+  "Marshall","NE","StClair","NE","Talladega","NE","Shelby","NE","Jefferson","NE",
+  "Morgan","NE","Cullman","NE",
+  # Northwest (NW Tennessee Valley / Highland Rim) — no Fayette/Tuscaloosa
+  "Lauderdale","NW","Colbert","NW","Lawrence","NW","Madison","NW","Jackson","NW"
+)
+
+# Attach Region to labels; keep any unmapped counties as "Other"
+labels.region <- labels.df %>%
+  mutate(Location = trimws(Location)) %>%
+  left_join(region_map, by = "Location") %>%
+  mutate(Region = fct_relevel(replace_na(Region, "Other"),
+                              c("SW","SE","BB","NE","NW","Other")))
+
+stopifnot(nrow(labels.region) == nrow(k1.mean))  # simple alignment check
+```
+
+```{r plotbyregion, message=FALSE, warning=FALSE}
+add_region_order <- function(df_mean, labels_with_region){
+  # Combine means + labels by row order (assumes labels are in the same ID order)
+  df_long <- bind_cols(df_mean, labels_with_region) %>%
+    pivot_longer(cols = starts_with("K"), names_to = "K", values_to = "value") %>%
+    mutate(
+      K = factor(K, levels = sort(unique(K))),
+      Region = fct_relevel(Region, c("SW","SE","BB","NE","NW","Other")),
+      ID = as.integer(ID)
+    ) %>%
+    arrange(Region, Location, ID, K) %>%
+    group_by(Region) %>%
+    mutate(Order = dense_rank(paste(Location, ID))) %>%
+    ungroup()
+  df_long
+}
+
+k1.long.reg <- add_region_order(k1.mean, labels.region)
+k2.long.reg <- add_region_order(k2.mean, labels.region)
+k3.long.reg <- add_region_order(k3.mean, labels.region)
+k4.long.reg <- add_region_order(k4.mean, labels.region)
+```
+
+```{r plothelper, message=FALSE, warning=FALSE}
+library(grid)     # for unit()
+
+plot_region_bars <- function(df_long, title_txt,
+                             strip_size = 16, axis_title = 14, title_size = 20) {
+
+  ggplot(df_long, aes(x = Order, y = value, fill = K)) +
+    geom_col(width = 1, colour = NA) +                     # clean, full-width bars
+    scale_fill_manual(values = colors, drop = FALSE) +
+    scale_x_continuous(expand = expansion(mult = c(0, 0))) +  # no extra side padding
+    facet_grid(
+      rows = NULL, cols = vars(Region),
+      scales = "free_x", space = "free_x",
+      switch = "x"                                         # put strips at the bottom
+    ) +
+    labs(
+      title = title_txt,
+      x = "Individuals (ordered within Region)",
+      y = "Ancestry (Q)"
+    ) +
+    theme_light(base_size = 11) +
+    theme(
+      # text sizes
+      plot.title   = element_text(size = title_size, hjust = 0.5),
+      axis.title.x = element_text(size = axis_title),
+      axis.title.y = element_text(size = axis_title),
+
+      # facet strip tweaks
+      strip.placement = "outside",
+      strip.text.x    = element_text(size = strip_size, colour = "white"),
+      strip.background = element_rect(fill = "grey50", colour = NA),
+
+      # spacing and grids
+      panel.spacing.x = unit(0.5, "lines"),
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+
+      # cleaner axes
+      axis.text.x = element_blank(),
+      axis.ticks.x = element_blank(),
+
+      # legend off (turn on with legend.position = "bottom" if desired)
+      legend.position = "none"
+    )
+}
+```
+
+```{r plots, message=FALSE, warning=FALSE}
+# K = 1
+plot_region_bars(k1.long.reg, "STRUCTURE K = 1 — facetted by Region")
+
+plot_region_bars(k2.long.reg, "STRUCTURE K = 2 — facetted by Region")
+
+plot_region_bars(k3.long.reg, "STRUCTURE K = 3 — facetted by Region")
+
+plot_region_bars(k4.long.reg, "STRUCTURE K = 4 — facetted by Region")
+```

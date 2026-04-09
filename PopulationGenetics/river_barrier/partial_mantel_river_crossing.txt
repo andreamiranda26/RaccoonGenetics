@@ -1,0 +1,21 @@
+Partial Mantel test (genetic ~ river_cross | geographic distance)
+Permutations: 1000 
+
+River name field used:  gnis_name 
+Unique river names matched were written to:  /scratch/Raccoon_andrea/gabe_trial/scripts/PopulationGenetics/river_barrier/river_name_values_used.txt 
+
+
+Partial Mantel statistic based on Pearson's product-moment correlation 
+
+Call:
+mantel.partial(xdis = gen_dist, ydis = river_cross_dist, zdis = geo_dist,      method = "pearson", permutations = N_PERM) 
+
+Mantel statistic r: 0.02265 
+      Significance: 0.20679 
+
+Upper quantiles of permutations (null model):
+   90%    95%  97.5%    99% 
+0.0372 0.0487 0.0613 0.0721 
+Permutation: free
+Number of permutations: 1000
+

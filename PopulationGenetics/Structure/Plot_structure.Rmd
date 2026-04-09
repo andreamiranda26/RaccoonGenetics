@@ -1,0 +1,161 @@
+---
+title: "Structure Analysis Raccoons"
+output:
+  html_document:
+    df_print: paged
+---
+
+## Load Libraries
+
+```{r load-libraries, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(ggplot2)
+
+knitr::opts_chunk$set(fig.path = "plots/", dev = c("png", "svg"), dpi=400, cache=T)
+
+```
+
+### Import data
+```{r import-data, message=FALSE, warning=FALSE}
+
+colors <- c("#1F77B4FF", "#FF7F0EFF", "#2CA02CFF", "#D62728FF", "#9467BDFF")
+
+k1.file <- "/scratch/Raccoon_andrea/gabe_trial/analysis/structure/harvester/K1.indfile"
+k2.file <- "/scratch/Raccoon_andrea/gabe_trial/analysis/structure/harvester/K2.indfile"
+k3.file <- "/scratch/Raccoon_andrea/gabe_trial/analysis/structure/harvester/K3.indfile"
+k4.file <- "/scratch/Raccoon_andrea/gabe_trial/analysis/structure/harvester/K4.indfile"
+
+k1 <- read.table(k1.file, sep = "") %>% 
+  select(V2, V6) %>% rename(ID = V2, K1 = V6)
+
+k2 <- read.table(k2.file, sep = "") %>% 
+  select(V2, V6, V7) %>% rename(ID = V2, K1 = V6, K2 = V7)
+
+k3 <- read.table(k3.file, sep = "") %>% 
+  select(V2, V6, V7, V8) %>% rename(ID = V2, K1 = V6, K2 = V7, K3 = V8)
+
+k4 <- read.table(k4.file, sep = "") %>% 
+  select(V2, V6, V7, V8, V9) %>% rename(ID = V2, K1 = V6, K2 = V7, K3 = V8, K4 = V9)
+
+labels.df <- read.csv("/scratch/Raccoon_andrea/gabe_trial/scripts/PopulationGenetics/labels.csv")
+
+
+```
+
+### Process the data
+```{r process-data, message=FALSE, warning=FALSE}
+k1.mean <- data.frame(ID = character(1), K1 = numeric(1))
+k2.mean <- data.frame(ID = character(1), K1 = numeric(1), K2 = numeric(1))
+k3.mean <- data.frame(ID = character(1), K1 = numeric(1), K2 = numeric(1), K3 = numeric(1))
+k4.mean <- data.frame(ID = character(1), K1 = numeric(1), K2 = numeric(1), K3 = numeric(1), K4 = numeric(1))
+
+for (i in seq(1:240)) {
+  k1.loop <- k1 %>% subset(ID == i) %>% colMeans()
+  k1.mean <- rbind(k1.mean, k1.loop)
+
+  k2.loop <- k2 %>% subset(ID == i) %>% colMeans()
+  k2.mean <- rbind(k2.mean, k2.loop)
+  
+  k3.loop <- k3 %>% subset(ID == i) %>% colMeans()
+  k3.mean <- rbind(k3.mean, k3.loop)
+  
+  k4.loop <- k4 %>% subset(ID == i) %>% colMeans()
+  k4.mean <- rbind(k4.mean, k4.loop)
+}
+k1.ggplot <- k1.mean %>% slice(-1) %>% cbind(labels.df) %>% 
+                     pivot_longer(cols=starts_with("K"),names_to="K", values_to="value") %>% group_by(Location)
+k2.ggplot <- k2.mean %>% slice(-1) %>% cbind(labels.df) %>% 
+                     pivot_longer(cols=starts_with("K"),names_to="K", values_to="value") %>% group_by(Location)
+k3.ggplot <- k3.mean %>% slice(-1) %>% cbind(labels.df) %>% 
+                     pivot_longer(cols=starts_with("K"),names_to="K", values_to="value") %>% group_by(Location)
+k4.ggplot <- k4.mean %>% slice(-1) %>% cbind(labels.df) %>% 
+                     pivot_longer(cols=starts_with("K"),names_to="K", values_to="value") %>% group_by(Location)
+```
+
+### Plot data
+```{r plot-k1, fig.height = 10, fig.width = 40, fig.align = "center"}
+k1.ggplot %>%
+  ggplot(aes(fill=K, y=value, x=ID)) +
+  geom_bar(position="fill", stat="identity") +
+  scale_fill_manual(values=colors) +
+  facet_grid(~ Location, scales = "free_x", space = "free_x") +  # <- fixed
+  theme_light() +
+  theme(strip.text = element_text(size = 40, color = "white"),
+        axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y=element_blank(),
+        axis.title.x = element_text(size = 30),
+        axis.title.y = element_text(size = 30),
+        plot.title = element_text(size = 50, hjust = 0.5),
+        panel.background = element_blank(),
+        panel.grid.major  = element_blank(),
+        panel.grid.minor  = element_blank(),
+        legend.position = "none") +
+  labs(title="Structure K=2", x = "Individuals", y = "Ancestry")
+```
+
+
+### Plot data
+```{r plot-K2, fig.height = 10, fig.width = 40, fig.align = "center"}
+k2.ggplot %>%
+  ggplot(aes(fill=K, y=value, x=ID)) +
+  geom_bar(position="fill", stat="identity") +
+  scale_fill_manual(values=colors) +
+  facet_grid(~ Location, scales = "free_x", space = "free_x") +  # <- fixed
+  theme_light() +
+  theme(strip.text = element_text(size = 40, color = "white"),
+        axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y=element_blank(),
+        axis.title.x = element_text(size = 30),
+        axis.title.y = element_text(size = 30),
+        plot.title = element_text(size = 50, hjust = 0.5),
+        panel.background = element_blank(),
+        panel.grid.major  = element_blank(),
+        panel.grid.minor  = element_blank(),
+        legend.position = "none") +
+  labs(title="Structure K=2", x = "Individuals", y = "Ancestry")
+```
+
+```{r plot-K3, fig.height = 10, fig.width = 40, fig.align = "center"}
+k3.ggplot %>%
+  ggplot(aes(fill=K, y=value, x=ID)) +
+  geom_bar(position="fill", stat="identity") +
+  scale_fill_manual(values=colors) +
+  facet_grid(~ Location, scales = "free_x", space = "free_x") +  # <- fixed
+  theme_light() +
+  theme(strip.text = element_text(size = 40, color = "white"),
+        axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y=element_blank(),
+        axis.title.x = element_text(size = 30),
+        axis.title.y = element_text(size = 30),
+        plot.title = element_text(size = 50, hjust = 0.5),
+        panel.background = element_blank(),
+        panel.grid.major  = element_blank(),
+        panel.grid.minor  = element_blank(),
+        legend.position = "none") +
+  labs(title="Structure K=3", x = "Individuals", y = "Ancestry")
+```
+
+```{r plot-K4, fig.height = 10, fig.width = 40, fig.align = "center"}
+k4.ggplot %>%
+  ggplot(aes(fill=K, y=value, x=ID)) +
+  geom_bar(position="fill", stat="identity") +
+  scale_fill_manual(values=colors) +
+  facet_grid(~ Location, scales = "free_x", space = "free_x") +  # <- fixed
+  theme_light() +
+  theme(strip.text = element_text(size = 40, color = "white"),
+        axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y=element_blank(),
+        axis.title.x = element_text(size = 30),
+        axis.title.y = element_text(size = 30),
+        plot.title = element_text(size = 50, hjust = 0.5),
+        panel.background = element_blank(),
+        panel.grid.major  = element_blank(),
+        panel.grid.minor  = element_blank(),
+        legend.position = "none") +
+  labs(title="Structure K=4", x = "Individuals", y = "Ancestry")
+```
+

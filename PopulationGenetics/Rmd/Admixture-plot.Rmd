@@ -1,0 +1,159 @@
+---
+title: "Plotting Admixture Data"
+output:
+  html_document:
+    df_print: paged
+  html_notebook: default
+  pdf_document: default
+editor_options: 
+    chunk_output_type: inline
+---
+###this document is for running the best k value plot and not the admixture plot itself
+## Load libraries
+```{r}
+library(adegenet)
+library(ggplot2)
+library(tidyverse)
+library(ggpubr)
+library(ggforce)
+
+knitr::opts_chunk$set(fig.path = "plots_LD/", dev = c("png", "svg"), dpi=400, cache=TRUE)
+```
+
+## Import files
+```{r import, cache=T}
+labels.df <- read.csv("/scratch/Raccoon_andrea/gabe_trial/scripts/PopulationGenetics/labels.csv")
+
+```
+
+## Plot Best K
+```{r best-k, fig.height = 5, fig.width = 20, fig.align = "center", cache=TRUE}
+
+K1File <- "/scratch/Raccoon_andrea/gabe_trial/scripts/PopulationGenetics/Admixture/logs/Admixture_K1-4020635.out"
+K2File <- "/scratch/Raccoon_andrea/gabe_trial/scripts/PopulationGenetics/Admixture/logs/Admixture_K2-4020636.out"
+K3File <- "/scratch/Raccoon_andrea/gabe_trial/scripts/PopulationGenetics/Admixture/logs/Admixture_K3-4020637.out"
+K4File <- "/scratch/Raccoon_andrea/gabe_trial/scripts/PopulationGenetics/Admixture/logs/Admixture_K4-4020638.out"
+K5File <- "/scratch/Raccoon_andrea/gabe_trial/scripts/PopulationGenetics/Admixture/logs/Admixture_K5-4020639.out"
+
+cv.values <- c()
+
+cv.value <- grep('CV',readLines(K1File),  value = TRUE) %>% str_split(.,": ", ) %>% last() %>% last()
+cv.values <- append(cv.values, cv.value)
+
+cv.value <- grep('CV',readLines(K2File),  value = TRUE) %>% str_split(.,": ", ) %>% last() %>% last()
+cv.values <- append(cv.values, cv.value)
+
+cv.value <- grep('CV',readLines(K3File),  value = TRUE) %>% str_split(.,": ", ) %>% last() %>% last()
+cv.values <- append(cv.values, cv.value)
+
+cv.value <- grep('CV',readLines(K4File),  value = TRUE) %>% str_split(.,": ", ) %>% last() %>% last()
+cv.values <- append(cv.values, cv.value)
+
+cv.value <- grep('CV',readLines(K5File),  value = TRUE) %>% str_split(.,": ", ) %>% last() %>% last()
+cv.values <- append(cv.values, cv.value)
+
+cv.df <- data.frame(K = as.numeric(seq(1, 5)), CV = as.numeric(cv.values))
+
+ggplot(cv.df, aes(x=K, y=CV)) +
+  geom_point()
+```
+
+## K Loop
+```{r, fig.height = 5, fig.width = 20, fig.align = "center", eval = FALSE}
+for (k in seq(1, 5)) {
+  k.table <- read.table(paste0("admixture.", k, ".Q"))
+barplot(t(as.matrix(k.table)), names.arg=labels.df[,2], col=funky(10), main=paste0("Filter 100% | Bootstrap 1000 | K=",k),
+        xlab="Individuals", ylab="Ancestry", space=0, las=2)
+}
+
+```
+
+# K loop - ggplot (numbers for locations + legend + pagination)
+```{r ggplot, fig.height = 8, fig.width = 16, fig.align = "center", cache=TRUE}
+basePath <- "/scratch/Raccoon_andrea/gabe_trial/analysis/admixture/"
+
+# preferred order (keeps "Unknown")
+loc_order <- c("Autauga","Baldwin","Barbour","Blount","Calhoun","Cherokee","Chilton","Clay","Cleburne","Coffee",
+  "Colbert","Cullman","Dale","Dallas","DeKalb","Elmore","Etowah","Fayette","Geneva","Houston","Jackson","Jefferson",
+  "Lauderdale","Lawrence","Lee","Macon","Madison","Marengo","Marshall","Milton","Mobile","Monroe","Montgomery","Morgan",
+  "Pike","Shelby","StClair","Talladega","Tuscaloosa","Unknown")
+
+# clean Location once and lock levels (prevents NA facet)
+labels_clean <- labels.df %>%
+  dplyr::mutate(
+    Location = stringr::str_squish(as.character(Location)),
+    Location = dplyr::recode(Location,
+      "St Clair" = "StClair",
+      "St. Clair" = "StClair",
+      "De Kalb" = "DeKalb",
+      "Dekalb"  = "DeKalb",
+      .default = Location
+    ),
+    Location = dplyr::if_else(is.na(Location) | Location == "", "Unknown", Location)
+  )
+
+loc_levels <- c(loc_order, setdiff(unique(labels_clean$Location), loc_order))
+loc_map <- tibble::tibble(LocID = seq_along(loc_levels), Location = loc_levels)
+
+# save a CSV key
+dir.create("plots_LD", showWarnings = FALSE, recursive = TRUE)
+write.csv(loc_map, file.path("plots_LD","admixture_LocID_key.csv"), row.names = FALSE)
+
+# pagination layout
+n_cols <- 8
+n_rows <- 2
+per_page <- n_cols * n_rows
+
+for (k in 1:5) {
+  Q <- read.table(file.path(basePath, sprintf("admixture.%d.Q", k)), blank.lines.skip = TRUE)
+  stopifnot(nrow(Q) == nrow(labels_clean))
+
+  df <- dplyr::bind_cols(labels_clean, Q) %>%
+    dplyr::mutate(
+      Location = factor(Location, levels = loc_levels),
+      LocID    = as.integer(Location),
+      # per-location index for x-axis (so no crowded sample labels)
+      idx      = ave(seq_len(n()), Location, FUN = seq_along)
+    ) %>%
+    tidyr::pivot_longer(dplyr::starts_with("V"), names_to = "K", values_to = "value")
+
+  # how many pages of facets?
+  pages <- ggforce::n_pages(
+    ggplot(df, aes(fill = K, y = value, x = idx)) +
+      geom_bar(stat = "identity") +
+      ggforce::facet_wrap_paginate(~ LocID, ncol = n_cols, nrow = n_rows, scales = "free_x")
+  )
+
+  for (p in 1:pages) {
+    # which LocIDs fall on this page
+    from <- (p - 1) * per_page + 1
+    to   <- min(p * per_page, nrow(loc_map))
+    key_page <- loc_map[from:to, , drop = FALSE]
+
+    plt <- ggplot(df, aes(fill = K, y = value, x = idx)) +
+      geom_bar(stat = "identity") +
+      scale_fill_manual(values = funky(10)) +
+      ggforce::facet_wrap_paginate(~ LocID, ncol = n_cols, nrow = n_rows,
+                                   scales = "free_x", page = p) +
+      theme_light() +
+      theme(strip.text   = element_text(size = 14, color = "white"),
+            axis.text.x  = element_blank(),
+            axis.text.y  = element_blank(),
+            axis.ticks   = element_blank(),
+            axis.title.x = element_text(size = 18),
+            axis.title.y = element_text(size = 18),
+            plot.title   = element_text(size = 22, hjust = 0.5),
+            panel.background = element_blank(),
+            panel.grid.major = element_blank(),
+            panel.grid.minor = element_blank()) +
+      labs(title = paste0("Admixture | K=", k),
+           subtitle = paste0("Page ", p, " of ", pages, " — facet labels are LocID (see key below)"),
+           x = "Individuals (index within location)", y = "Ancestry")
+
+    print(plt)
+    # show the LocID→Location key for this page
+    print(ggpubr::ggtexttable(key_page, rows = NULL))
+  }
+}
+
+```

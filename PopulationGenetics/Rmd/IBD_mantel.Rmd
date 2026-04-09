@@ -1,0 +1,279 @@
+---
+title: "Isolation by Distance – Alabama Raccoons"
+output: html_document
+---
+
+```{r setup, message=FALSE, warning=FALSE}
+library(vcfR)
+library(adegenet)
+library(poppr)
+library(geosphere)
+library(vegan)
+# library(spdep)   # ← comment this out for now
+library(igraph)
+library(scales)
+
+set.seed(123)
+
+vcfFile <- "/scratch/Raccoon_andrea/gabe_trial/data/vcf/Raccoon.filtered.vcf"
+labFile <- "/scratch/Raccoon_andrea/gabe_trial/scripts/PopulationGenetics/labels_coords.csv"
+out_dir <- "/scratch/Raccoon_andrea/gabe_trial/results/IBD"
+
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+```
+
+## Load labels
+```{r load-labels, message=FALSE, warning=FALSE}
+labs <- read.csv(labFile)
+
+head(labs)
+```
+
+## Read VCF and convert to genlight
+```{r genlight, message=FALSE, warning=FALSE}
+vcf <- read.vcfR(vcfFile, verbose = FALSE)
+gl <- vcfR2genlight(vcf)
+
+vcf_ids <- indNames(gl)
+
+# --- clean IDs (common hidden issue) ---
+labs$sampleID <- trimws(as.character(labs$sampleID))
+vcf_ids       <- trimws(as.character(vcf_ids))
+
+# --- check duplicates in labels ---
+dup_labs <- labs$sampleID[duplicated(labs$sampleID)]
+if (length(dup_labs) > 0) {
+  message("Duplicate sampleIDs in labels (showing up to 20): ",
+          paste(head(unique(dup_labs), 20), collapse=", "))
+}
+
+# --- what's missing? ---
+missing_in_labels <- setdiff(vcf_ids, labs$sampleID)
+missing_in_vcf    <- setdiff(labs$sampleID, vcf_ids)
+
+if (length(missing_in_labels) > 0) {
+  message("VCF IDs missing in labels (showing up to 20): ",
+          paste(head(missing_in_labels, 20), collapse=", "))
+}
+if (length(missing_in_vcf) > 0) {
+  message("Label IDs missing in VCF (showing up to 20): ",
+          paste(head(missing_in_vcf, 20), collapse=", "))
+}
+
+# --- subset to intersection so analysis can proceed ---
+keep_ids <- intersect(vcf_ids, labs$sampleID)
+
+if (length(keep_ids) < 10) stop("Too few overlapping samples between VCF and labels to run IBD.")
+
+# subset genlight to overlapping IDs
+gl <- gl[match(keep_ids, vcf_ids), ]
+vcf_ids2 <- indNames(gl)
+
+# reorder labels to match genlight sample order
+labs2 <- labs[match(vcf_ids2, labs$sampleID), ]
+stopifnot(all(labs2$sampleID == vcf_ids2))
+
+# assign populations
+pop(gl) <- as.factor(labs2$county)
+
+```
+
+## Genetic distance
+```{r gendist, message=FALSE, warning=FALSE}
+gen_dist <- bitwise.dist(gl)          # returns a dist object
+attr(gen_dist, "Labels") <- labs2$sampleID  # ensure labels persist
+
+# also keep a matrix version if you want
+gen_dist_mat <- as.matrix(gen_dist)
+```
+
+## Geographic distance (km)
+```{r geodist, message=FALSE, warning=FALSE}
+coords <- as.matrix(labs2[, c("lon","lat")])
+
+geo_dist_mat <- distm(coords, fun = distHaversine) / 1000
+rownames(geo_dist_mat) <- labs2$sampleID
+colnames(geo_dist_mat) <- labs2$sampleID
+
+geo_dist <- as.dist(geo_dist_mat)
+attr(geo_dist, "Labels") <- labs2$sampleID
+```
+
+## Mantel test
+```{r mantel, message=FALSE, warning=FALSE}
+mantel_raw <- mantel(as.dist(gen_dist), as.dist(geo_dist),
+                     method = "pearson", permutations = 1000)
+
+geo_log <- log10(geo_dist + 1)
+
+mantel_log <- mantel(as.dist(gen_dist), as.dist(geo_log),
+                     method = "pearson", permutations = 1000)
+
+mantel_raw
+mantel_log
+```
+
+
+## Plot IBD: between-county comparisons in main panel,
+## with within-county genetic-distance density on the right
+```{r plotIBD, message=FALSE, warning=FALSE}
+# pairwise values from matrices
+upper_idx <- upper.tri(gen_dist_mat)
+
+geo_vals <- geo_dist_mat[upper_idx]
+gen_vals <- gen_dist_mat[upper_idx]
+
+# identify within-county pairs directly from county labels
+county_mat <- outer(as.character(labs2$county), as.character(labs2$county), FUN = "==")
+within_vals <- county_mat[upper_idx]
+
+# split into within-county vs between-county
+geo_between <- geo_vals[!within_vals]
+gen_between <- gen_vals[!within_vals]
+
+geo_within <- geo_vals[within_vals]
+gen_within <- gen_vals[within_vals]
+
+# check that within-county geographic distances are zero (or essentially zero)
+summary(geo_within)
+
+# dynamic x-axis so points are not cut off
+xmax <- max(geo_between, na.rm = TRUE)
+xpad <- xmax * 0.03
+
+
+layout(matrix(c(1, 2), nrow = 1), widths = c(4.8, 1.2))
+
+# --- Main scatter: BETWEEN-county comparisons only ---
+par(mar = c(5, 5, 2, 1))
+
+plot(
+  geo_between, gen_between,
+  pch = 21,
+  col = "darkorchid4",
+  bg = alpha("darkorchid3", 0.45),
+  cex = 1.0,
+  xlab = "Geographic distance (km)",
+  ylab = "Genetic distance",
+  main = ""
+)
+
+# regression line on between-county comparisons
+ibd_lm <- lm(gen_between ~ geo_between)
+abline(ibd_lm, col = "black", lwd = 2)
+
+# fix x-axis range so no points are clipped
+usr <- par("usr")
+rect(usr[1], usr[3], xmax + xpad, usr[4], col = NA, border = NA)
+plot.new()
+
+plot(
+  geo_between, gen_between,
+  pch = 21,
+  col = "darkorchid4",
+  bg = alpha("darkorchid3", 0.45),
+  cex = 1.0,
+  xlab = "Geographic distance (km)",
+  ylab = "Genetic distance",
+  xlim = c(0, xmax + xpad),
+  ylim = range(c(gen_between, gen_within), na.rm = TRUE),
+  main = ""
+)
+abline(ibd_lm, col = "black", lwd = 2)
+
+# --- Right panel: within-county genetic-distance density ---
+par(mar = c(5, 0.5, 2, 3))
+
+dens <- density(gen_within, na.rm = TRUE)
+
+plot(
+  dens$y, dens$x,
+  type = "l",
+  lwd = 2,
+  col = "darkorchid4",
+  xlab = "",
+  ylab = "",
+  yaxt = "n",
+  xaxt = "n",
+  ylim = range(c(gen_between, gen_within), na.rm = TRUE),
+  main = ""
+)
+
+polygon(
+  c(0, dens$y, 0),
+  c(min(dens$x), dens$x, max(dens$x)),
+  col = alpha("darkorchid3", 0.35),
+  border = NA
+)
+lines(dens$y, dens$x, lwd = 2, col = "darkorchid4")
+
+mtext("Within-county\ngenetic distance", side = 4, line = 1.2, cex = 0.9)
+
+```
+
+## Save Outputs
+```{r save, message=FALSE, warning=FALSE}
+# Save Mantel text outputs (what you already do)
+writeLines(capture.output(mantel_raw),
+           con = file.path(out_dir, "mantel_raw.txt"))
+
+writeLines(capture.output(mantel_log),
+           con = file.path(out_dir, "mantel_log.txt"))
+
+# NEW: save distance objects for re-use (river barrier, etc.)
+saveRDS(gen_dist, file = "/scratch/Raccoon_andrea/gabe_trial/scripts/PopulationGenetics/gen_dist.rds")
+saveRDS(geo_dist, file = "/scratch/Raccoon_andrea/gabe_trial/scripts/PopulationGenetics/geo_dist.rds")
+
+# Optional: save matrices too (handy for debugging/plots)
+saveRDS(gen_dist_mat, file = "/scratch/Raccoon_andrea/gabe_trial/scripts/PopulationGenetics/gen_dist_matrix.rds")
+saveRDS(geo_dist_mat, file = "/scratch/Raccoon_andrea/gabe_trial/scripts/PopulationGenetics/geo_dist_matrix.rds")
+```
+
+## Mantel correlogram test
+```{r mantelcorr, message=FALSE, warning=FALSE}
+## Mantel correlogram
+library(vegan)
+
+# choose distance class width (25–50 km works well for county data)
+correlog <- mantel.correlog(
+  D.eco = gen_dist_mat,
+  D.geo = geo_dist_mat,
+  n.class = 10,
+  nperm = 1000
+)
+
+correlog
+```
+
+## Plot Mantel correlogram test
+```{r Plotmantelcorr, message=FALSE, warning=FALSE}
+
+# Keep only bins with non-missing Mantel correlations
+keep <- !is.na(correlog$mantel.res[, "Mantel.cor"])
+
+mantel_res_plot <- correlog$mantel.res[keep, ]
+
+# Midpoints for the bins that actually returned values
+class_midpoints <- mantel_res_plot[, "class.index"]
+mantel_r <- mantel_res_plot[, "Mantel.cor"]
+
+# Labels for the bins that actually have results
+class_labels <- c("25", "75", "125", "175", "225")
+
+plot(
+  class_midpoints, mantel_r,
+  type = "b",
+  pch = 21,
+  bg = "darkorchid3",
+  col = "black",
+  xaxt = "n",
+  xlab = "Geographic distance class (km)",
+  ylab = "Mantel correlation (r)",
+  xlim = c(0, 225)
+)
+
+axis(1, at = class_midpoints, labels = class_labels)
+
+abline(h = 0, col = "#D3D3D3", lty = 2)
+
+```

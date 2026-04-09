@@ -1,0 +1,9 @@
+WARN  30-09 17:29:03,940 (PGDSpiderConfig.java:loadConfig:75)  -PGDSpider configuration file not found! Loading default configuration.
+INFO  30-09 17:33:08,409 (PGDSpiderConfig.java:loadConfig:64)  -load PGDSpider configuration from: /mmfs1/home/azm0272/miniforge3/envs/Structure/share/pgdspider-2.1.1.5-1/spider.conf.xml
+INFO  30-09 17:37:31,695 (PGDSpiderConfig.java:loadConfig:64)  -load PGDSpider configuration from: /mmfs1/home/azm0272/miniforge3/envs/Structure/share/pgdspider-2.1.1.5-1/spider.conf.xml
+DEBUG 30-09 17:37:31,777 (ParserFactory.java:getParserInstance:177)  -New VcfParser instance
+DEBUG 30-09 17:37:31,791 (ParserFactory.java:getParserInstance:177)  -New VcfParser instance
+INFO  30-09 17:38:44,982 (PGDSpiderConfig.java:loadConfig:64)  -load PGDSpider configuration from: /mmfs1/home/azm0272/miniforge3/envs/Structure/share/pgdspider-2.1.1.5-1/spider.conf.xml
+DEBUG 30-09 17:38:45,045 (ParserFactory.java:getParserInstance:177)  -New VcfParser instance
+DEBUG 30-09 17:38:45,059 (ParserFactory.java:getParserInstance:177)  -New VcfParser instance
+WARN  30-09 17:38:59,238 (StructureWriter.java:parseAlignedSampleData:589)  -Data are converted to integers (A=1, T=2, G=3, C=4)!

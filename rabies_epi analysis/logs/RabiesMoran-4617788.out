@@ -1,0 +1,39 @@
+Starting rabies Moran's I hotspot analysis
+Wed Apr  8 16:48:41 CDT 2026
+Downloading/reading Alabama counties from TIGER...
+Reading rabies totals...
+Reading labels_coords.csv...
+Number of study counties: 38 
+Building k-nearest-neighbor network with k = 5 
+Running Global Moran's I...
+Running Local Moran's I...
+
+Done.
+
+Global Moran's I results:
+# A tibble: 2 × 6
+  variable    moran_I  p_value permutations n_counties k_neighbors
+  <chr>         <dbl>    <dbl>        <dbl>      <int>       <dbl>
+1 raw_total     0.246 0.00300          1000         38           5
+2 log1p_total   0.495 0.000999         1000         38           5
+# A tibble: 76 × 11
+   county  county_std total value_used centered_value lag_centered_value local_I
+   <chr>   <chr>      <dbl>      <dbl>          <dbl>              <dbl>   <dbl>
+ 1 Blount  BLOUNT         7          7          -4.84              -2.84  0.0568
+ 2 Marsha… MARSHALL       1          1         -10.8               -8.44  0.378 
+ 3 Cullman CULLMAN        3          3          -8.84              -5.84  0.213 
+ 4 Mobile  MOBILE         0          0         -11.8               -4.04  0.198 
+ 5 Colbert COLBERT        0          0         -11.8              -11.0   0.540 
+ 6 Pike    PIKE          13         13           1.16               3.76  0.0180
+ 7 Lawren… LAWRENCE       0          0         -11.8              -11.0   0.540 
+ 8 Madison MADISON        1          1         -10.8              -11.0   0.494 
+ 9 Shelby  SHELBY        13         13           1.16               5.96  0.0285
+10 Tallad… TALLADEGA     33         33          21.2                7.76  0.677 
+# ℹ 66 more rows
+# ℹ 4 more variables: z_score <dbl>, p_value <dbl>, lisa_class <fct>,
+#   variable <chr>
+
+Outputs written to:
+/scratch/Raccoon_andrea/gabe_trial/scripts/PopulationGenetics/rabies_epi/outputs/moran_hotspots 
+Finished
+Wed Apr  8 16:48:45 CDT 2026

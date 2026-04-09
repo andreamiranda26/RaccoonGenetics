@@ -1,0 +1,23 @@
+Starting rabies Moran's I hotspot analysis
+Wed Apr  8 16:46:34 CDT 2026
+Downloading/reading Alabama counties from TIGER...
+Reading rabies totals...
+Reading labels_coords.csv...
+Number of study counties: 38 
+Building k-nearest-neighbor network with k = 5 
+Running Global Moran's I...
+Running Local Moran's I...
+
+Done.
+
+Global Moran's I results:
+# A tibble: 2 × 6
+  variable    moran_I  p_value permutations n_counties k_neighbors
+  <chr>         <dbl>    <dbl>        <dbl>      <int>       <dbl>
+1 raw_total     0.246 0.00400          1000         38           5
+2 log1p_total   0.495 0.000999         1000         38           5
+
+Outputs written to:
+/scratch/Raccoon_andrea/gabe_trial/scripts/PopulationGenetics/rabies_epi/outputs/moran_hotspots 
+Finished
+Wed Apr  8 16:46:42 CDT 2026

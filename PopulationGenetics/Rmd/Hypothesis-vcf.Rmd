@@ -1,0 +1,192 @@
+cat > Hypotheses-analysis.Rmd <<'EOF'
+---
+title: "Raccoon genetics: H1–H3 analyses"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, message=FALSE, warning=FALSE}
+suppressPackageStartupMessages({
+  library(adegenet)
+  library(pegas)
+  library(hierfstat)
+  library(poppr)
+  library(tidyverse)   # dplyr, tidyr, readr, stringr, tibble, ggplot2
+  library(vegan)       # for Mantel (H3, optional)
+})
+
+set.seed(42)
+knitr::opts_chunk$set(fig.path = "plots_LD/", dev = c("png", "svg"), dpi = 300, cache = FALSE)
+
+# Paths (EDIT if needed)
+vcfFile     <- "/scratch/Raccoon_andrea/gabe_trial/data/vcf/Raccoon.filtered.vcf"
+labels_path <- "/scratch/Raccoon_andrea/gabe_trial/scripts/PopulationGenetics/labels.csv"
+out_dir     <- "/scratch/Raccoon_andrea/gabe_trial/results"
+dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+
+# Hypothesis 1 pairs
+pairs_h1 <- tibble::tribble(
+  ~A,           ~B,        ~barrier,
+  "Baldwin",    "Mobile",  TRUE,
+  "Montgomery", "Elmore",  TRUE,
+  "Autauga",    "Chilton", TRUE,
+  "Cherokee",   "Calhoun", TRUE,
+  "DeKalb",     "Calhoun", FALSE
+)
+``` 
+
+###Load VCF → genind and attach populations
+```{r genind, message=FALSE, warning=FALSE}
+message("Reading VCF (pegas::read.vcf)...")
+# read only the first 300 loci (fast test)
+allPop.vcf <- read.vcf(vcfFile, to = 300)
+#allPop.vcf    <- read.vcf(vcfFile)   # add 'to=30000' if you want to limit loci
+message("Converting to genind...")
+allPop.genind <- loci2genind(allPop.vcf)
+
+# Read & clean labels (Sample, Location)
+lab <- read.csv(labels_path, stringsAsFactors = FALSE)
+lab$Sample   <- stringr::str_squish(as.character(lab$Sample))
+lab$Location <- stringr::str_squish(as.character(lab$Location))
+lab$Location[is.na(lab$Location) | lab$Location == ""] <- "Unknown"
+lab$Location <- dplyr::recode(lab$Location,
+  "St Clair" = "StClair",
+  "St. Clair" = "StClair",
+  "De Kalb" = "DeKalb",
+  "Dekalb"  = "DeKalb",
+  .default = lab$Location
+)
+lab <- dplyr::distinct(lab, Sample, .keep_all = TRUE)
+
+# Align labels to genind order and attach pop()
+ids <- adegenet::indNames(allPop.genind) %>% stringr::str_squish()
+idx <- match(ids, lab$Sample)
+if (any(is.na(idx))) {
+  stop("Missing samples in labels.csv: ", paste(ids[is.na(idx)], collapse=", "))
+}
+lab_ord <- lab[idx, , drop = FALSE]
+stopifnot(identical(ids, lab_ord$Sample))
+adegenet::pop(allPop.genind) <- factor(lab_ord$Location)
+
+# quick sanity
+data.frame(N_individuals = nInd(allPop.genind),
+           N_pops = nPop(allPop.genind)) %>% knitr::kable()
+```
+
+###H2 — Per-county diversity (Ho/He/FIS)
+```{r cdiversity, message=FALSE, warning=FALSE}
+bs <- basic.stats(allPop.genind)
+div_summary <- tibble(
+  Population = rownames(bs$perloc),
+  Ho  = rowMeans(bs$Ho, na.rm = TRUE),
+  He  = rowMeans(bs$Hs, na.rm = TRUE),
+  FIS = rowMeans(bs$Fis, na.rm = TRUE),
+  n_ind = as.integer(table(pop(allPop.genind))[Population])
+) %>% arrange(Population)
+
+write.csv(div_summary, file.path(out_dir, "H2_diversity_summary_by_county.csv"), row.names = FALSE)
+div_summary %>% dplyr::arrange(desc(He)) %>% head(10) %>% knitr::kable()
+```
+
+
+###H1 — Pairwise FST (all counties) + your target pairs
+```{r H1-pairwise-fst, message=FALSE}
+dat_hier <- hierfstat::genind2hierfstat(allPop.genind)
+
+# All pairwise WC FST as a matrix
+pw_wc <- hierfstat::pairwise.WCfst(dat_hier)
+
+# Robust reshape to long format with explicit column names
+pw_tbl <- as.data.frame(as.table(as.matrix(pw_wc)), stringsAsFactors = FALSE)
+names(pw_tbl) <- c("PopA", "PopB", "Fst")
+
+# Keep only unique pairs (upper triangle), drop self-pairs and NAs
+pw_tbl <- pw_tbl %>%
+  dplyr::filter(PopA != PopB, !is.na(Fst)) %>%
+  dplyr::mutate(PopA = as.character(PopA), PopB = as.character(PopB)) %>%
+  dplyr::filter(PopA < PopB) %>%              # unique direction
+  dplyr::arrange(dplyr::desc(Fst))
+
+# Save + quick preview
+write.csv(pw_tbl, file.path(out_dir, "H1_pairwise_FST_all_pairs.csv"), row.names = FALSE)
+pw_tbl %>% head(15) %>% knitr::kable()
+```
+
+
+###And update the **target pairs** extraction to guard against typos/missing pops:
+
+```{r H1-target-pairs, message=FALSE}
+# Check that all requested pops exist in the FST matrix
+all_pops <- intersect(rownames(pw_wc), colnames(pw_wc))
+missing <- setdiff(unique(c(pairs_h1$A, pairs_h1$B)), all_pops)
+if (length(missing)) {
+  warning("These populations are not in the FST matrix: ", paste(missing, collapse = ", "))
+}
+
+pairs_tbl <- pairs_h1 %>%
+  dplyr::filter(A %in% all_pops, B %in% all_pops) %>%
+  dplyr::rowwise() %>%
+  dplyr::mutate(Fst = as.numeric(pw_wc[A, B])) %>%
+  dplyr::ungroup()
+
+write.csv(pairs_tbl, file.path(out_dir, "H1_pairwise_FST_target_pairs.csv"), row.names = FALSE)
+pairs_tbl %>% knitr::kable()
+```
+
+###H1 — AMOVA per pair (Population = county)
+```{r amova, message=FALSE, warning=FALSE}
+amova_rows <- list()
+for (i in seq_len(nrow(pairs_h1))) {
+  A <- pairs_h1$A[i]; B <- pairs_h1$B[i]; br <- pairs_h1$barrier[i]
+  sub <- allPop.genind[pop(allPop.genind) %in% c(A, B)]
+  poppr::strata(sub) <- data.frame(Location = droplevels(pop(sub)))
+  poppr::setPop(sub) <- ~Location
+  a <- poppr::poppr.amova(sub, ~Location, nperm = 999)
+  perc <- 100 * a$componentsofcovariance / sum(a$componentsofcovariance)
+  amova_rows[[i]] <- tibble(
+    Pair = paste(A, B, sep=" vs "),
+    barrier = br,
+    Among_Pops_sigma = a$componentsofcovariance[1],
+    Among_Pops_pct   = perc[1],
+    Within_sigma     = a$componentsofcovariance[2],
+    Within_pct       = perc[2],
+    P_value          = a$statphi$`Pr(>Phi)`[1]
+  )
+}
+amova_tbl <- bind_rows(amova_rows)
+write.csv(amova_tbl, file.path(out_dir, "H1_AMOVA_by_pair.csv"), row.names = FALSE)
+amova_tbl %>% knitr::kable(digits = 4)
+```
+###H1 — Overall WC FST + 95% CI (bootstrap)
+```{r bootstrap, message=FALSE, warning=FALSE}
+wc_overall <- wc(allPop.genind)$FST
+ci_overall <- boot.vc(dat = dat_hier[, -1], pop = dat_hier[, 1], nboot = 1000)$ci
+overall_tbl <- tibble(Estimate_FST = wc_overall,
+                      CI_lower = ci_overall[1], CI_upper = ci_overall[2])
+write.csv(overall_tbl, file.path(out_dir, "H1_overall_FST_CI.csv"), row.names = FALSE)
+overall_tbl %>% knitr::kable(digits = 5)
+```
+
+###H3 — Mantel (IBD) scaffold (optional; needs coordinates)
+```{r mantel, message=FALSE, warning=FALSE}
+coords_path <- file.path(dirname(labels_path), "sample_coords_template.csv")
+if (!file.exists(coords_path)) {
+  coords <- tibble::tibble(Sample = lab_ord$Sample, lon = NA_real_, lat = NA_real_)
+  write.csv(coords, coords_path, row.names = FALSE)
+  message("Wrote coordinate template: ", coords_path,
+          "\nFill lon/lat (WGS84) to enable Mantel (IBD) analysis.")
+} else {
+  coords <- read.csv(coords_path)
+  if (all(!is.na(coords$lon)) && all(!is.na(coords$lat))) {
+    coords <- coords[match(ids, coords$Sample), c("lon","lat")]
+    Dgen <- dist(allPop.genind)
+    Dgeo <- dist(as.matrix(coords))
+    mantel_res <- vegan::mantel(Dgen, Dgeo, permutations = 999)
+    saveRDS(mantel_res, file.path(out_dir, "H3_mantel_result.rds"))
+    mantel_res
+  } else {
+    message("Coords file exists but contains NA lon/lat — skipping Mantel.")
+  }
+}
+```

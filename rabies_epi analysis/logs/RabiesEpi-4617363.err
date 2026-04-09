@@ -1,0 +1,12 @@
+Reading labels: /scratch/Raccoon_andrea/gabe_trial/scripts/PopulationGenetics/labels_with_landcover2.csv
+Reading rabies totals: /scratch/Raccoon_andrea/gabe_trial/scripts/PopulationGenetics/AL_rabies_2009_2025.csv
+Wrote joined county table: /scratch/Raccoon_andrea/gabe_trial/results/rabies_epi/county_rabies_landcover_joined.csv
+Warning message:
+In cor.test.default(dat$total_cases, dat$suitability_raw, method = "spearman") :
+  Cannot compute exact p-value with ties
+Wrote stats: /scratch/Raccoon_andrea/gabe_trial/results/rabies_epi/rabies_suitability_stats.txt
+Saved: /scratch/Raccoon_andrea/gabe_trial/results/rabies_epi/rabies_vs_suitability_nb.png
+Building Alabama county polygons via tigris...
+Saved: /scratch/Raccoon_andrea/gabe_trial/results/rabies_epi/map_movement_suitability_by_county.png
+Saved combined figure: /scratch/Raccoon_andrea/gabe_trial/results/rabies_epi/figure_suitability_map_plus_scatter.png
+DONE.

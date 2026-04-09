@@ -1,0 +1,9 @@
+Starting simple landscape partial Mantel
+Fri Feb 27 13:30:14 CST 2026
+            predictor           r         p permutations
+1      forest_absdiff -0.05660242 0.6833167         1000
+2   developed_absdiff -0.02592084 0.5454545         1000
+3 agriculture_absdiff -0.02561145 0.5944056         1000
+4     wetland_absdiff -0.02594109 0.5884116         1000
+Finished
+Fri Feb 27 13:30:20 CST 2026

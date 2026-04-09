@@ -1,0 +1,572 @@
+---
+title: "Adegenet From VCF"
+output:
+  html_document:
+    df_print: paged
+---
+
+## Load libraries and set working directory
+```{r load-libs, message=FALSE, warning=FALSE}
+library(adegenet)
+library(vcfR)
+library(pegas)
+library(hierfstat)
+library(ggplot2)
+library(viridis)
+library(tidyverse)     # for later chunks
+library(adegraphics)
+
+knitr::opts_chunk$set(fig.path = "plots_LD/", dev = c("png", "svg"), dpi = 500, cache = TRUE)
+```
+
+## Import data, make `genind`, and attach populations
+```{r import-data, message=FALSE, warning=FALSE}
+# ---- paths ----
+vcfFile     <- "/scratch/Raccoon_andrea/gabe_trial/data/vcf/Raccoon.filtered.vcf"
+labels_path <- "/scratch/Raccoon_andrea/gabe_trial/scripts/PopulationGenetics/labels.csv"
+
+# ---- VCF -> loci -> genind ----
+allPop.vcf    <- read.vcf(vcfFile, to = 38500) #39000 since the 
+allPop.genind <- loci2genind(allPop.vcf)
+
+# ---- read labels (Sample, Location) and clean ----
+lab <- read.csv(labels_path, stringsAsFactors = FALSE)
+lab$Sample   <- trimws(as.character(lab$Sample))
+lab$Location <- trimws(as.character(lab$Location))
+lab$Location[is.na(lab$Location) | lab$Location == ""] <- "Unknown"
+
+# ---- align label rows to genind individual order ----
+ids <- adegenet::indNames(allPop.genind)
+ids <- trimws(ids)
+
+idx <- match(ids, lab$Sample)
+if (any(is.na(idx))) {
+  miss <- ids[is.na(idx)]
+  stop(sprintf("These VCF/genind sample IDs are missing from labels.csv: %s",
+               paste(miss, collapse = ", ")))
+}
+lab_ord <- lab[idx, , drop = FALSE]  # same order as genind
+stopifnot(identical(ids, lab_ord$Sample))
+
+# ---- attach population factor ----
+adegenet::pop(allPop.genind) <- factor(lab_ord$Location)
+
+# quick sanity prints
+# print(table(pop(allPop.genind)))
+# print(nInd(allPop.genind))
+```
+
+
+## Start analysis
+
+### Bartlett test of homogeneity of variances
+```{r bartlett-test, cache=TRUE}
+allPop.summary <- summary(allPop.genind)
+bartlett.test(list(allPop.summary$Hexp, allPop.summary$Hobs))
+t.test(allPop.summary$Hexp, allPop.summary$Hobs,
+       paired = TRUE, var.equal = TRUE, alternative = "greater")
+```
+
+### F-stats
+
+#### Test of Hardy–Weinberg Equilibrium
+```{r hwt, message=FALSE, warning=FALSE, cache=TRUE}
+allPop.hwt <- hw.test(allPop.genind, B = 0)
+colMeans(allPop.hwt)
+```
+
+#### General Fst & Fis
+```{r fstats, cache=TRUE}
+allPop.fstats <- wc(allPop.genind)
+print(paste("FIS:", allPop.fstats$FIS))
+print(paste("FST:", allPop.fstats$FST))
+
+allPop.basics <- basic.stats(allPop.genind)
+allPop.basics$overall
+```
+
+#### Per-population diversity (Ho, He, FIS)
+```{r per-pop-diversity, cache=TRUE}
+# Calculate basic stats per population (matrices: loci x populations)
+pop_stats <- hierfstat::basic.stats(allPop.genind)
+
+# Per-population means across loci
+pop_ho  <- colMeans(pop_stats$Ho, na.rm = TRUE)   # observed het
+pop_he  <- colMeans(pop_stats$Hs, na.rm = TRUE)   # expected het
+pop_fis <- colMeans(pop_stats$Fis, na.rm = TRUE)  # inbreeding coeff
+
+# Fallback for FIS if needed (e.g., divisions produce NaN for some loci/pops)
+if (length(pop_fis) != length(pop_ho) || any(is.na(pop_fis))) {
+  pop_fis_alt <- colMeans(1 - (pop_stats$Ho / pop_stats$Hs), na.rm = TRUE)
+  # use alt where primary is NA
+  nm <- names(pop_fis)
+  pop_fis[is.na(pop_fis)] <- pop_fis_alt[is.na(pop_fis)]
+  names(pop_fis) <- nm
+}
+
+# Ensure consistent ordering of vectors
+Population <- names(pop_ho)
+
+# Optional: sample sizes per population
+n_by_pop <- as.data.frame(table(Population = as.character(pop(allPop.genind))))
+names(n_by_pop)[2] <- "N"
+
+# Combine to a tidy table
+pop_div_df <- tibble::tibble(
+  Population = Population,
+  Ho  = round(pop_ho[Population], 3),
+  He  = round(pop_he[Population], 3),
+  FIS = round(pop_fis[Population], 3)
+) %>%
+  dplyr::left_join(n_by_pop, by = "Population") %>%
+  dplyr::arrange(Population)
+
+# Write to scratch directory and print
+readr::write_csv(pop_div_df, "/scratch/Raccoon_andrea/gabe_trial/results/PerPopulation_Diversity.csv")
+pop_div_df
+
+# Quick visual check (optional)
+ggplot(pop_div_df, aes(He, Ho, label = Population)) +
+  geom_point(color = "steelblue", size = 2) +
+  geom_text(nudge_y = 0.02, size = 3) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+  labs(x = "Expected heterozygosity (He)",
+       y = "Observed heterozygosity (Ho)",
+       title = "Per-population heterozygosity across counties") +
+  theme_minimal(base_size = 12)
+```
+
+
+#### Bootstraps
+```{r bootstraps, cache=TRUE}
+betas(allPop.genind, nboot = 102, lim = c(0.025, 0.975), diploid = TRUE, betaijT = FALSE)
+```
+
+### Inbreeding
+```{r inbreeding, message=FALSE, warning=FALSE, cache=TRUE}
+allPop.inbr <- inbreeding(allPop.genind, N = 100)
+allPop.FIS  <- sapply(allPop.inbr, mean)
+
+hist(allPop.FIS, col = "orange", xlab = "mean value of F",
+     main = "Distribution of mean F across individuals")
+```
+
+
+#Helper (put once, before PCA/PCoA)
+```{r plot-helper, include=FALSE}
+# -------------------------------------------------------------------------
+# Helper (put once, before PCA/PCoA)
+# -------------------------------------------------------------------------
+render_sclass <- function(dfxy, fac, main, xlab, ylab) {
+  # 1) Try adegraphics
+  g1 <- try(adegraphics::s.class(dfxy = dfxy, fac = fac, xax = 1, yax = 2,
+                                 psub.text = main, xlab = xlab, ylab = ylab),
+            silent = TRUE)
+  if (!inherits(g1, "try-error")) return(invisible(NULL))
+
+  # 2) Fallback: ade4
+  g2 <- try({
+    ade4::s.class(dfxy, fac = fac, xax = 1, yax = 2,
+                  col = adegenet::funky(nlevels(fac)),
+                  cpoint = 0.7, clabel = 0)
+    title(main = main, xlab = xlab, ylab = ylab)
+  }, silent = TRUE)
+  if (!inherits(g2, "try-error")) return(invisible(NULL))
+
+  # 3) Fallback: ggplot
+  df <- data.frame(A1 = dfxy[,1], A2 = dfxy[,2], Pop = fac)
+  print(
+    ggplot2::ggplot(df, ggplot2::aes(A1, A2, color = Pop)) +
+      ggplot2::stat_ellipse(type = "norm", linewidth = 0.5) +
+      ggplot2::geom_point(size = 0.7) +
+      ggplot2::labs(title = main, x = xlab, y = ylab) +
+      ggplot2::theme_minimal()
+  )
+}
+
+allPop.pcoa <- dudi.pco(dist(allPop.genind), scannf = FALSE, nf = 15)
+var.explained.pcoa <- round(allPop.pcoa$eig / sum(allPop.pcoa$eig) * 100, 1)
+
+dfxy <- as.data.frame(allPop.pcoa$li[, 1:2, drop = FALSE])
+names(dfxy) <- c("Axis1", "Axis2")
+fac  <- droplevels(as.factor(pop(allPop.genind)))
+
+render_sclass(
+  dfxy, fac,
+  main = "PCoA — colored by County",
+  xlab = paste0("Axis 1 (", var.explained.pcoa[1], "%)"),
+  ylab = paste0("Axis 2 (", var.explained.pcoa[2], "%)")
+)
+```
+
+```{r region_map, message=FALSE}
+# (your region_map code)
+region_map <- tibble::tribble(
+  ~Population,   ~Region,
+  # Southwest
+  "Baldwin",     "SW",
+  "Mobile",      "SW",
+  "Monroe",      "SW",
+  "Marengo",     "SW",
+  "Dallas",      "SW",
+
+  # Southeast
+  "Houston",     "SE",
+  "Dale",        "SE",
+  "Coffee",      "SE",
+  "Geneva",      "SE",
+  "Pike",        "SE",
+  "Barbour",     "SE",
+
+  # Black Belt / Central
+  "Montgomery",  "BB",
+  "Elmore",      "BB",
+  "Autauga",     "BB",
+  "Lee",         "BB",
+  "Chilton",     "BB",
+  "Macon",       "BB",
+
+  # Northeast
+  "Calhoun",     "NE",
+  "Etowah",      "NE",
+  "Cherokee",    "NE",
+  "DeKalb",      "NE",
+  "Blount",      "NE",
+  "Marshall",    "NE",
+  "StClair",     "NE",
+  "Talladega",   "NE",
+  "Shelby",      "NE",
+  "Jefferson",   "NE",
+  "Cullman",     "NE",
+
+  # Northwest (no Fayette, Tuscaloosa)
+  "Lauderdale",  "NW",
+  "Colbert",     "NW",
+  "Lawrence",    "NW",
+  "Madison",     "NW",
+  "Morgan",      "NW",
+  "Jackson",     "NW"
+)
+
+region_cols <- c(
+  SW="#1b9e77", BB="#d95f02", NE="#7570b3", SE="#e7298a", NW="#66a61e", Other="#a6761d"
+)
+
+# Check for unmapped counties
+mapped <- unique(region_map$Population)
+unmapped <- setdiff(unique(as.character(pop(allPop.genind))), mapped)
+if (length(unmapped)) message("Unmapped counties (will be 'Other' in plots): ",
+                              paste(sort(unmapped), collapse=", "))
+
+
+po <- allPop.pcoa$li
+pcoa_df <- tibble::tibble(
+  Sample = rownames(po),
+  Axis1 = as.numeric(po[,1]),
+  Axis2 = as.numeric(po[,2]),
+  Pop = as.character(pop(allPop.genind))
+)
+```
+
+```{r pcoa_county, message=FALSE}
+# (your PCoA-by-county plot)
+
+ggplot(pcoa_df, aes(Axis1, Axis2, color = Pop)) +
+  stat_ellipse(type = "norm", linewidth = 0.4, alpha = 0.6) +
+  geom_point(size = 1) +
+  labs(
+    title = "PCoA — colored by County (Population)",
+    x = paste0("Axis 1 (", round(allPop.pcoa$eig[1] / sum(allPop.pcoa$eig) * 100, 1), "%)"),
+    y = paste0("Axis 2 (", round(allPop.pcoa$eig[2] / sum(allPop.pcoa$eig) * 100, 1), "%)"),
+    color = "County"
+  ) +
+  theme_minimal(base_size = 11) +
+  guides(color = guide_legend(ncol = 2, override.aes = list(size = 3)))
+
+pcoa_reg <- pcoa_df %>%
+  dplyr::left_join(region_map, by = c("Pop" = "Population")) %>%
+  dplyr::mutate(Region = if_else(is.na(Region), "Other", Region),
+                Region = factor(Region, levels = c("SW","SE","BB","NE","NW","Other")))
+```
+
+```{r pcoa_region, message=FALSE}
+# (your PCoA-by-region plot)
+
+ggplot(pcoa_reg, aes(Axis1, Axis2, color = Region)) +
+  stat_ellipse(type = "norm", linewidth = 0.5, alpha = 0.7) +
+  geom_point(size = 1.2) +
+  scale_color_manual(values = region_cols, name = "Region", drop = FALSE) +
+  labs(
+    title = "PCoA — colored by Region",
+    x = paste0("Axis 1 (", round(allPop.pcoa$eig[1] / sum(allPop.pcoa$eig) * 100, 1), "%)"),
+    y = paste0("Axis 2 (", round(allPop.pcoa$eig[2] / sum(allPop.pcoa$eig) * 100, 1), "%)")
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "right")
+
+
+out_dir <- "/scratch/Raccoon_andrea/gabe_trial/results"
+dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+cat("N individuals:", nInd(allPop.genind), "  N loci:", nLoc(allPop.genind), "\n")
+```
+
+
+
+
+### H1 — Pairwise FST (all counties) + your target pairs
+
+```{r H1-pairwise-fst}
+dat_hier <- hierfstat::genind2hierfstat(allPop.genind)
+pw_wc    <- hierfstat::pairwise.WCfst(dat_hier)  # matrix Pop x Pop
+
+# All pairs in long form
+pw_tbl <- as.data.frame(as.table(as.matrix(pw_wc)), stringsAsFactors = FALSE)
+names(pw_tbl) <- c("PopA","PopB","Fst")
+pw_tbl <- pw_tbl |>
+  dplyr::filter(PopA != PopB, !is.na(Fst)) |>
+  dplyr::mutate(PopA = as.character(PopA), PopB = as.character(PopB)) |>
+  dplyr::filter(PopA < PopB) |>
+  dplyr::arrange(dplyr::desc(Fst))
+readr::write_csv(pw_tbl, file.path(out_dir, "H1_pairwise_FST_all_pairs.csv"))
+head(pw_tbl, 12)
+```
+
+```{r H1-pairwise-summary, message=FALSE}
+# Summarize pairwise FST among Alabama counties
+upper_vals <- pw_wc[upper.tri(pw_wc, diag = FALSE)]
+pairwise_summary <- tibble::tibble(
+  median = median(upper_vals, na.rm = TRUE),
+  min    = min(upper_vals, na.rm = TRUE),
+  max    = max(upper_vals, na.rm = TRUE),
+  q25    = quantile(upper_vals, 0.25, na.rm = TRUE, names = FALSE),
+  q75    = quantile(upper_vals, 0.75, na.rm = TRUE, names = FALSE),
+  n_pairs = sum(upper.tri(pw_wc, diag = FALSE))
+)
+
+readr::write_csv(pairwise_summary, file.path(out_dir, "H1_pairwise_FST_summary.csv"))
+pairwise_summary
+```
+
+```{r H1-target-pairs, message=FALSE}
+pairs_h1 <- tibble::tribble(
+  ~A,           ~B,           ~barrier,
+  "Baldwin",    "Mobile",     TRUE,   # river barrier
+  "Montgomery", "Elmore",     FALSE,  # same side, control
+  "Autauga",    "Chilton",    FALSE,  # same side, control
+  "Autauga",    "Montgomery", TRUE,   # across Alabama River
+  "Chilton",    "Elmore",     TRUE,   # across Coosa
+  "Cherokee",   "Calhoun",    TRUE,
+  "DeKalb",     "Calhoun",    TRUE,
+  "Etowah",     "Calhoun",    TRUE,
+  "DeKalb",     "Etowah",     FALSE,  # control
+  "Talladega",  "Shelby",     TRUE    # across Coosa
+)
+
+# normalize order to avoid A/B vs B/A duplicates
+pairs_h1 <- pairs_h1 |>
+  dplyr::rowwise() |>
+  dplyr::mutate(
+    A_norm = min(A, B),
+    B_norm = max(A, B)
+  ) |>
+  dplyr::ungroup() |>
+  dplyr::distinct(A_norm, B_norm, .keep_all = TRUE) |>
+  dplyr::select(A = A_norm, B = B_norm, barrier)
+
+all_pops <- intersect(rownames(pw_wc), colnames(pw_wc))
+missing  <- setdiff(unique(c(pairs_h1$A, pairs_h1$B)), all_pops)
+if (length(missing)) warning("Missing populations in FST matrix: ", paste(missing, collapse=", "))
+
+pairs_tbl <- pairs_h1 |>
+  dplyr::filter(A %in% all_pops, B %in% all_pops) |>
+  dplyr::rowwise() |>
+  dplyr::mutate(Fst = as.numeric(pw_wc[A, B])) |>
+  dplyr::ungroup()
+
+readr::write_csv(pairs_tbl, file.path(out_dir, "H1_pairwise_FST_target_pairs.csv"))
+pairs_tbl
+```
+
+```{r H1-target-pairs-ci, message=FALSE}
+pair_cis <- vector("list", nrow(pairs_tbl))
+nboot_pair <- 200   # use 1000+ for final (speed vs stability)
+
+for (i in seq_len(nrow(pairs_tbl))) {
+  A <- pairs_tbl$A[i]; B <- pairs_tbl$B[i]
+  sub <- allPop.genind[pop(allPop.genind) %in% c(A,B)]
+  dh  <- hierfstat::genind2hierfstat(sub)
+  loc_cols <- 2:ncol(dh)
+  reps <- numeric(nboot_pair)
+  for (b in seq_len(nboot_pair)) {
+    samp <- sample(loc_cols, length(loc_cols), replace = TRUE)
+    reps[b] <- suppressWarnings(as.numeric(hierfstat::wc(dh[, c(1, samp)])$FST))
+  }
+  ci <- stats::quantile(reps, c(.025,.975), na.rm=TRUE, names=FALSE)
+  pair_cis[[i]] <- tibble::tibble(A=A, B=B, Fst_CI_lower=ci[1], Fst_CI_upper=ci[2])
+}
+pair_ci_tbl <- dplyr::bind_rows(pair_cis)
+
+pairs_tbl <- dplyr::left_join(pairs_tbl, pair_ci_tbl, by=c("A","B"))
+readr::write_csv(pairs_tbl, file.path(out_dir, "H1_pairwise_FST_target_pairs_withCI.csv"))
+pairs_tbl
+```
+
+```{r H1-barrier-test, message=FALSE}
+# One-sided Wilcoxon: barrier > control
+h1_wilcox <- wilcox.test(Fst ~ barrier, data = pairs_tbl, alternative = "greater", exact = FALSE)
+
+# Bootstrap CI for mean difference (barrier - control)
+set.seed(123)
+B <- 5000
+diffs <- numeric(B)
+xb <- pairs_tbl$Fst[pairs_tbl$barrier]
+xc <- pairs_tbl$Fst[!pairs_tbl$barrier]
+for (b in seq_len(B)) {
+  diffs[b] <- mean(sample(xb, length(xb), replace = TRUE)) -
+              mean(sample(xc, length(xc), replace = TRUE))
+}
+h1_boot_ci <- stats::quantile(diffs, c(.025, .975), names = FALSE)
+
+h1_results <- tibble::tibble(
+  test = "Wilcoxon (barrier > control)",
+  p_value = h1_wilcox$p.value,
+  mean_diff = mean(xb) - mean(xc),
+  diff_CI_lower = h1_boot_ci[1],
+  diff_CI_upper = h1_boot_ci[2]
+)
+readr::write_csv(h1_results, file.path(out_dir, "H1_barrier_effect_test.csv"))
+h1_results
+```
+
+
+#### Quick H1 figure (barriers vs non-barriers)
+
+```{r H1-barplot, fig.height=4, fig.width=7}
+ggplot2::ggplot(pairs_tbl,
+                ggplot2::aes(x = reorder(paste(A, B, sep=" vs "), Fst),
+                             y = Fst, fill = barrier)) +
+  ggplot2::geom_col() +
+  ggplot2::coord_flip() +
+  ggplot2::scale_fill_manual(values = c(`TRUE`="#cd3e3e", `FALSE`="#3e7ccd"),
+                             name = "River barrier") +
+  ggplot2::labs(x = NULL, y = "Weir–Cockerham FST",
+                title = "Target county pairs") +
+  ggplot2::theme_minimal(base_size = 12)
+```
+
+
+## H3 Region AMOVA — updated regions
+## (uses out_dir already defined earlier)
+```{r region_mappp, fig.height=4, fig.width=7}
+# ----- Region map (updated) -----
+region_map <- tibble::tribble(
+  ~Population,  ~Region,
+  # Southwest (Mobile basin / Coastal Plain)
+  "Baldwin",    "SW",
+  "Mobile",     "SW",
+  "Monroe",     "SW",
+  "Marengo",    "SW",
+  "Dallas",     "SW",
+
+  # Southeast (SE Coastal Plain)
+  "Houston",    "SE",
+  "Dale",       "SE",
+  "Coffee",     "SE",
+  "Geneva",     "SE",
+  "Pike",       "SE",
+  "Barbour",    "SE",
+
+  # Black Belt / Central
+  "Montgomery", "BB",
+  "Elmore",     "BB",
+  "Autauga",    "BB",
+  "Lee",        "BB",
+  "Chilton",    "BB",
+  "Macon",      "BB",
+
+  # Northeast (Appalachian foothills / Ridge–Valley)
+  "Calhoun",    "NE",
+  "Etowah",     "NE",
+  "Cherokee",   "NE",
+  "DeKalb",     "NE",
+  "Blount",     "NE",
+  "Marshall",   "NE",
+  "StClair",    "NE",
+  "Talladega",  "NE",
+  "Shelby",     "NE",
+  "Jefferson",  "NE",
+  "Cullman",    "NE",
+
+  # Northwest (Tennessee Valley / Highland Rim)
+  "Lauderdale", "NW",
+  "Colbert",    "NW",
+  "Lawrence",   "NW",
+  "Madison",    "NW",
+  "Morgan",     "NW",
+  "Jackson",    "NW"
+)
+
+# ----- Build meta and join regions (with a couple of name fixes) -----
+pop_names <- as.character(adegenet::pop(allPop.genind)) |> trimws()
+pop_names <- dplyr::recode(pop_names,
+                           "St. Clair" = "StClair",
+                           "Montomery" = "Montgomery")
+
+meta <- tibble::tibble(Sample = adegenet::indNames(allPop.genind),
+                       Population = pop_names) |>
+        dplyr::left_join(region_map, by = "Population")
+
+# Warn about anything unmapped
+unmapped <- sort(unique(meta$Population[is.na(meta$Region)]))
+if (length(unmapped)) {
+  message("Unmapped counties (dropped from H3 AMOVA): ",
+          paste(unmapped, collapse = ", "))
+}
+
+# Keep only samples with a defined Region
+keep <- !is.na(meta$Region)
+g2   <- allPop.genind[keep]
+meta <- meta[keep, , drop = FALSE]
+
+# Attach hierarchical strata and set population level
+adegenet::strata(g2) <- data.frame(
+  Region     = factor(meta$Region, levels = c("SW","SE","BB","NE","NW")),
+  Population = meta$Population
+)
+adegenet::setPop(g2) <- ~Population
+
+# Quick sanity check: counts per Region
+print(dplyr::count(meta, Region, sort = TRUE))
+
+# ----- AMOVA (999 perms) -----
+a2 <- poppr::poppr.amova(g2, ~Region/Population, nperm = 999)
+
+# Tidy variance components (% of total), robust to column naming
+comp_df <- as.data.frame(a2$componentsofcovariance)
+comp_df$Level <- rownames(comp_df)
+var_col <- dplyr::case_when(
+  "Variance" %in% names(comp_df) ~ "Variance",
+  "Sigma"    %in% names(comp_df) ~ "Sigma",
+  TRUE ~ names(comp_df)[which(sapply(comp_df, is.numeric))[1]]
+)
+
+tab <- tibble::tibble(
+  Level    = comp_df$Level,
+  Variance = as.numeric(comp_df[[var_col]])
+) |>
+  dplyr::mutate(Percent = 100 * Variance / sum(Variance))
+
+readr::write_csv(tab, file.path(out_dir, "H3_AMOVA_hierarchical.csv"))
+
+# Save Φ-statistics / permutation p-values if available
+if (!is.null(a2$statphi)) {
+  phi_tab <- as.data.frame(a2$statphi)
+  phi_tab$Level <- rownames(phi_tab)
+  readr::write_csv(phi_tab, file.path(out_dir, "H3_AMOVA_phi_pvals.csv"))
+}
+
+tab
+```
+
+
+
